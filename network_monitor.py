@@ -421,7 +421,7 @@ class Network_Monitor(app_manager.RyuApp):
                         W = 1 / ((1 - ro_0-ro_1) * (1 - ro_0 - ro_1-ro_2))
 
                     NETQX[src][dst][queue_id]=(rate,error_count+6,W,tuple[3])
-
+                    #self.logger.info('Queue stats: %s',NETQX[src][dst][queue_id])
 
             else:
 

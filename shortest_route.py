@@ -57,6 +57,8 @@ import access_control
 
 from network_monitor import SLEEP_PERIOD, BW_LINK
 
+from collections import defaultdict, deque
+
 
 #import qos_metric
 MIN_HOP_ROUTING=False
@@ -1376,8 +1378,233 @@ class Shortest_Route(app_manager.RyuApp):
             else:
                 return None
 
-
     #########################################################
+    #########################################################
+    #  FUZZY ISSUES    ########################################
+    #########################################################
+    def dijkstra(self,graph, initial):
+        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa ')
+
+        # visited = {initial: 0}
+        visited = {initial: [1000, 10, 10, 10]}
+
+        # visited = {initial: [1000, 0, 0, 0]}
+        # visited = [99909,9990,99999990]
+
+        path = {}
+        beta = 0.8
+
+        nodes = set(graph.nodes)
+        edges = set(graph.edges)
+        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa %s ', nodes)
+        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa %s ', edges)
+        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa 2 %s ', graph.edges)
+
+
+
+
+        while nodes:
+            min_node = None
+            for node in nodes:
+                if node in visited:
+                    #self.logger.info('dijkstraaaaaaaaaaaaaaaaaa visited[node]: %s visited[node]:%s ', visited[node], visited[min_node])
+
+                    if min_node is None:
+                        min_node = node
+                        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa min_node: %s ---visited:%s ', min_node,visited)
+                        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa min_node: %s ---visited[node]:%s ', min_node,visited[node][0])
+
+                    elif visited[node][0] < visited[min_node][0]:
+                        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa UPDATED min_node: %s ', min_node)
+                        min_node = node
+
+            if min_node is None:
+                break
+
+            nodes.remove(min_node)
+            self.logger.info('dijkstraaaaaaaaaaaaaaaaaa NODE REMOVED %s ', min_node)
+            self.logger.info('dijkstraaaaaaaaaaaaaaaaaa visited[min_node] %s ', visited[min_node])
+
+            current_weight = visited[min_node]
+            self.logger.info('dijkstraaaaaaaaaaaaaaaaaa NODE current_weight %s ', current_weight)
+
+            #for edge in graph.edges[min_node]:
+            for edge in graph[min_node]:
+                self.logger.info('dijkstraaaaaaaaaaaaaaaaaa loopP edge: %s ', edge)
+
+                try:
+                    #hopCount = current_weight[2] + 1
+                    weight = []
+
+                    self.logger.info('dijkstraaaaaaaaaaaaaaaaaa loopP graph edge: %s ', graph[min_node][edge]['queue_id_0'])
+                    #graph edge: {'reserved_bw': 200, 'residual_bw': 300000000, 'delay': inf, 'bandwidth': 100, 'queue_id_15': (0, 0, 0, 1000), 'queue_id_0': (0, 0, 0, 1000), 'queue_id_47': (0, 0, 0, 1000),
+                    pathBw = min(current_weight[0], graph[min_node][edge]['queue_id_0'][0])
+                    pathDelay = current_weight[1] + graph[min_node][edge]['queue_id_0'][1]
+                    hopCount = current_weight[2] + 1
+
+                    fuzzBw = self.calc_pxy(pathBw, 100, 1000)
+                    fuzzHop = self.calc_hxy(hopCount, 1, 10)
+
+                    # fuzzBw = calc_pxy(pathDelay, 100, 1000)
+                    fuzzTotal = beta * min(fuzzBw, fuzzHop) + (1 - beta) * 1 / 3 * (fuzzBw + fuzzHop)
+                    weight = [pathBw, pathDelay, hopCount, fuzzTotal]
+                    '''
+                    weight = [2,2,hopCount,2]
+                    '''
+                    #######print 'edge:',edge,'- weight',weight,'-- current_weight',current_weight
+                except:
+                    err_msg = sys.exc_info()[0]
+                    self.logger.info("<except Djkstra: %s>   ", err_msg)
+                    continue
+
+                if edge not in visited or weight[3] > visited[edge][3]:
+                    visited[edge] = weight
+                    path[edge] = min_node
+                    #print 'UPDATE for edge:', edge, '- weight', weight, '-- current_weight', current_weight
+                    self.logger.info('UPDATE for edge: %s - weight: %s -- current_weight:%s',edge, weight,current_weight)
+        #print 'visited', visited
+        self.logger.info('dijkstraaaaaaaaaaaaaaaaaa visited: %s ', visited)
+
+        return visited, path
+
+    def shortest_fuzzy_path(self,graph, origin, destination):
+
+        # Run:     print(shortest_fuzzy_path(graph, 'A', 'B')) # output: (25, ['A', 'B', 'D'])
+        self.logger.info(' shortest_fuzzy_pa dijkstraaaaaaaaaaaaaaaaaa ')
+
+        visited, paths = self.dijkstra(graph, origin)
+        self.logger.info(' shortest_fuzzy_pa dijkstraaaaaaaaaaaaaaaaaa 22222222222222')
+
+        full_path = deque()
+        _destination = paths[destination]
+
+        while _destination != origin:
+            full_path.appendleft(_destination)
+            _destination = paths[_destination]
+
+        full_path.appendleft(origin)
+        full_path.append(destination)
+
+        return visited[destination], list(full_path)
+
+    def calc_pxy(self,x, minBw=100, maxBw=1000):
+
+        if x < minBw:
+            return 0.25
+
+        if minBw < x < maxBw:
+            return 0.75 * (x - minBw) / (maxBw - minBw + 0.0) + 0.25
+
+        if maxBw < x:
+            return 1
+
+    def calc_hxy(self,x, minH, maxH):
+        m = 0.4
+        if x <= minH:
+            return 1
+        if minH < x <= maxH:
+            return ((maxH - x) * (1 - m) / (maxH - minH)) + m
+            # return (x-minH)/(3/4*(maxH-minH))
+        if maxH < x:
+            return 0
+
+    def calc(self,input1, input2, input3):
+
+        x_hop = np.arange(0, 1000, 1)
+        x_delay = np.arange(0, 600, 1)
+        x_loss = np.arange(1, 11, 1)
+
+        bandwidth = ctrl.Antecedent(x_hop, 'bandwidth')
+        delay = ctrl.Antecedent(x_delay, 'delay')
+        lossCount = ctrl.Antecedent(x_loss, 'lossCount')
+
+        tip = ctrl.Consequent(np.arange(0, 11, 1), 'tip')
+
+        names = ['lo', 'md', 'hi']
+
+        # bandwidth.automf(names=names)
+        # delay.automf(names=names)
+        # tip.automf(names=names)
+        # Generate fuzzy membership functions
+        bandwidth['lo'] = fuzz.trimf(x_hop, [0, 0, 400])  # (start,top,stop)
+        bandwidth['md'] = fuzz.trimf(x_hop, [100, 500, 900])
+        bandwidth['hi'] = fuzz.trimf(x_hop, [600, 1000, 1000])
+
+        delay['lo'] = fuzz.trimf(x_delay, [0, 0, 240])  # (start,top,stop)
+        delay['md'] = fuzz.trimf(x_delay, [60, 300, 540])
+        delay['hi'] = fuzz.trimf(x_delay, [360, 600, 600])
+
+        lossCount['lo'] = fuzz.trimf(x_loss, [0, 0, 4])  # (start,top,stop)
+        lossCount['md'] = fuzz.trimf(x_loss, [1, 5, 9])
+        lossCount['hi'] = fuzz.trimf(x_loss, [6, 10, 10])
+
+        tip['lo'] = fuzz.trimf(tip.universe, [0, 0, 5])
+        tip['md'] = fuzz.trimf(tip.universe, [0, 5, 11])
+        tip['hi'] = fuzz.trimf(tip.universe, [5, 11, 11])
+
+        rule1 = ctrl.Rule(antecedent=(
+            (bandwidth['lo'] & delay['lo'] & lossCount['lo']) |
+            (bandwidth['lo'] & delay['lo'] & lossCount['md']) |
+            (bandwidth['lo'] & delay['lo'] & lossCount['hi']) |
+            (bandwidth['lo'] & delay['md'] & lossCount['lo']) |
+            (bandwidth['lo'] & delay['md'] & lossCount['md']) |
+            (bandwidth['lo'] & delay['md'] & lossCount['hi']) |
+            (bandwidth['lo'] & delay['hi'] & lossCount['lo']) |
+            (bandwidth['lo'] & delay['hi'] & lossCount['md']) |
+            (bandwidth['lo'] & delay['hi'] & lossCount['hi']) |
+            (bandwidth['md'] & delay['md'] & lossCount['md']) |
+            (bandwidth['md'] & delay['md'] & lossCount['hi']) |
+            (bandwidth['md'] & delay['hi'] & lossCount['lo']) |
+            (bandwidth['md'] & delay['hi'] & lossCount['md']) |
+            (bandwidth['md'] & delay['hi'] & lossCount['hi']) |
+            (bandwidth['hi'] & delay['hi'] & lossCount['hi'])
+        ),
+            consequent=tip['lo'], label='rule ns')
+
+        rule2 = ctrl.Rule(antecedent=(
+
+            (bandwidth['md'] & delay['lo'] & lossCount['lo']) |
+            (bandwidth['md'] & delay['lo'] & lossCount['md']) |
+            (bandwidth['md'] & delay['lo'] & lossCount['hi']) |
+            (bandwidth['md'] & delay['md'] & lossCount['lo']) |
+
+            (bandwidth['hi'] & delay['lo'] & lossCount['hi']) |
+            (bandwidth['hi'] & delay['md'] & lossCount['md']) |
+            (bandwidth['hi'] & delay['md'] & lossCount['hi']) |
+            (bandwidth['hi'] & delay['hi'] & lossCount['lo']) |
+            (bandwidth['hi'] & delay['hi'] & lossCount['md'])
+        ),
+            consequent=tip['md'], label='rule ze')
+
+        rule3 = ctrl.Rule(antecedent=(
+            (bandwidth['hi'] & delay['lo'] & lossCount['lo']) |
+            (bandwidth['hi'] & delay['lo'] & lossCount['md']) |
+            (bandwidth['hi'] & delay['md'] & lossCount['lo'])
+
+        ),
+            consequent=tip['hi'], label='rule ps')
+
+        # system = ctrl.ControlSystem(rules=[rule1, rule2, rule3])
+
+        # bandwidth.view()
+        # delay.view()
+
+
+
+
+        tipping_ctrl = ctrl.ControlSystem([rule1, rule2, rule3])
+        tipping = ctrl.ControlSystemSimulation(tipping_ctrl)
+
+        tipping.input['bandwidth'] = input1
+        tipping.input['delay'] = input2
+        tipping.input['lossCount'] = input3
+
+        # Crunch the numbers
+        tipping.compute()
+        ############
+        # print '###########',tipping.output['tip']
+        return tipping.output['tip']
+
     #########################################################
     # FLOW ISSUES    ########################################
 
@@ -1797,13 +2024,22 @@ class Shortest_Route(app_manager.RyuApp):
         return (max_bw_0,max_bw_15,max_bw_31,max_bw_47)
         #return 100000000-max_bw
 
-    #
-    def find_path(self,src_sw,dst_sw,mode=None):
+    def find_path(self, src_sw, dst_sw, mode=None):
+        fuzzy_tuple=self.shortest_fuzzy_path(NETQX, src_sw,dst_sw)
+        self.logger.info('fuzzy shortest path: %s', fuzzy_tuple)
+        path_of_bw = 1231 #atmaca
+        path_ = fuzzy_tuple[1]
+        
+        return (path_, path_of_bw)
 
+    #
+    def find_path2(self,src_sw,dst_sw,mode=None):
+        fuzzy_tuple=self.shortest_fuzzy_path(NETQX, src_sw,dst_sw)
+        self.logger.info('fuzzy shortest path: %s', fuzzy_tuple)
         if mode == None:
             self.logger.info("POLICY NONE!!!")
 
-            poso = nx.all_simple_paths(NETQX, src_sw, dst_sw)
+            poso = nx.all_simple_paths(NETQX, src_sw,src_sw)
 
             # possible_paths = list(possible_paths)
             possible_paths = list(poso)
@@ -1811,7 +2047,7 @@ class Shortest_Route(app_manager.RyuApp):
             route_dict = []
             for pathik in possible_paths:
 
-                self.path_fuzzy_calc(pathik)
+                #self.path_fuzzy_calc(pathik)
 
                 used_bw = self.path_bw_calculate_usage_mult(pathik, mode)
                 #used_bw  <===(max_bw_0,max_bw_15,max_bw_31,max_bw_47)
@@ -1951,7 +2187,7 @@ class Shortest_Route(app_manager.RyuApp):
         if mode == 'combined':
             pass
 
-
+        path_=fuzzy_tuple[1]
         return (path_,path_of_bw)
 
     #burayi min max load yapacagim.
